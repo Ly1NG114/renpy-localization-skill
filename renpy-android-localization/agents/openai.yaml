@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ren'Py Android 汉化 2.0"
+  short_description: "汉化、修复、签名并真机验证 Ren'Py Android APK"
+  default_prompt: "Use $renpy-android-localization to localize, repair, sign, and runtime-validate this Ren'Py Android APK."
