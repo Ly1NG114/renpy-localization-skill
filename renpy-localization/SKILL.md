@@ -41,6 +41,7 @@ Use the game's own engine so every translation identifier is exactly right:
 1. `python scripts/localize.py extract --lang <lang>` - parse the skeleton into `work/records_<lang>.json` (dialogue blocks + string pairs) and `work/unique_<lang>.json` (deduplicated source strings). **Never translate the same source twice**: a 70k-block game usually has ~55-60k unique strings.
 2. Build `glossary.json` before any bulk translation: every `define x = Character('Name')` (use `scripts/extract_characters.py` logic or grep), places, organizations, items, currencies, mythology, gameplay meters, and erotic vocabulary. Add `policies` entries mapping model-produced variants to canonical terms.
 3. Fix canonical translations for the main cast first; they appear in thousands of lines and every inconsistency is user-visible.
+4. Establish kinship/relationship direction BEFORE bulk translation (see "Fix kinship-term directionality" below): English "sister"/"brother" carries no relative age, but Chinese must pick 姐姐/妹妹/哥哥/弟弟 per speaker-addressee pair.
 
 ## Translate in two passes with enforced consistency
 
@@ -82,6 +83,14 @@ Validation compares token **multisets** (not raw strings) for: Ren'Py tags `{...
 - literal newlines in zh become `\n` escapes (a raw newline breaks the .rpy string parse).
 
 Apply rebuilds every tl file deterministically; `escape_rpy` keeps existing backslash sequences, escapes bare quotes, and escapes newlines. Report `MISSING translations: 0` before proceeding.
+
+## Fix kinship-term directionality (姐姐 vs 妹妹, 哥哥 vs 弟弟)
+
+Chinese kinship terms encode relative age; English does not. "sister" can be 姐姐 (older) or 妹妹 (younger), and "sis"/"sissy" hides the same ambiguity. Never translate these by the word alone - a literal one-size translation produces contradictory dialogue (e.g. two sisters each calling the other 姐姐), which players flag immediately.
+
+1. **Establish the facts first**: find in-game evidence for who is older - bios, letters/notes ("You're the bestest big sister ever!"), and self-referential lines ("you're literally not even three years older than me"). Record the canonical relationship in `glossary.json` (e.g. `{"en": "Penelope (older sister of Dalia)", "zh": "佩内洛普（达莉亚的姐姐）", "type": "note"}`) so every translation prompt carries it.
+2. **Audit every occurrence after translation**, with speaker + addressee context: pull all dialogue records matching `\bsister` and `\b(sis|sissy)\b` from `work/records_<lang>.json` (fields: `speaker`, `file`, `id`, `en`), resolve each speaker to a character, and read the surrounding scene. Include third-party lines - parents ("same as your sister"), friends theorizing ("First, her sister..."), and pet names ("Sissy").
+3. **Fix at memory level** (exact source keys in `work/memory_<lang>.json`), re-run `apply`, then `compile`. Verify the new strings are baked into the regenerated `.rpyc` zlib payload (details + Eternum field case in [references/renpy-field-guide.md](references/renpy-field-guide.md)).
 
 ## Bootstrap language + CJK fonts (PC)
 
@@ -145,6 +154,7 @@ Follow `references/renpy-android-field-guide.md`: immutable APK baseline, minima
 18. **Python `\b` treats CJK as word chars** - use `(?<![A-Za-z])Name(?![A-Za-z])` when replacing ASCII names embedded in Chinese text.
 19. **`renpy.savetoken.check_load(log, sig)` expects a str signature**; passing bytes silently fails verification.
 20. **Hook timing**: `config.after_load_callbacks` (no args) normalizes store values on load; `renpy.game.post_init` runs once before the main menu (one-shot repairs); `config.start_callbacks` only fires when a game starts - wrong for menu-time fixes.
+21. **Kinship terms are direction-dependent**: English "sister"/"sis" doesn't encode age; 姐姐 vs 妹妹 (and 哥哥 vs 弟弟) must be resolved per speaker-addressee from in-game evidence, not translated literally. Audit every occurrence - including "sis"/"sissy" variants and third-party references - after translation, fix memory, re-apply, recompile.
 
 ## Deliver the result
 

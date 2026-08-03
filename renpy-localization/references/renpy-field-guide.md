@@ -12,7 +12,8 @@ Field-tested on a 57,619-unique-string production run (Eternum 0.9.0, Ren'Py 8.3
 6. [Application format](#application-format)
 7. [Language bootstrap and fonts](#language-bootstrap-and-fonts)
 8. [Verification ladder](#verification-ladder)
-9. [Production numbers and expectations](#production-numbers-and-expectations)
+9. [Kinship term directionality](#kinship-term-directionality)
+10. [Production numbers and expectations](#production-numbers-and-expectations)
 
 ## Engine-generated skeleton
 
@@ -142,6 +143,54 @@ Report `MISSING translations: 0` before compiling.
 3. launch game GUI ~60-75s; inspect `log.txt` for error/traceback/warning;
 4. window title / main menu renders in target language (the title often comes from a translated string - strong runtime evidence);
 5. screenshot for the record.
+
+## Kinship term directionality
+
+Chinese kinship terms encode relative age; English does not. "sister" -> 姐姐 (older) or 妹妹 (younger), "brother" -> 哥哥/弟弟. Translating by the word alone produces contradictory dialogue (two sisters each calling the other 姐姐) that readers flag immediately. This is a terminology-consistency problem, not a style choice.
+
+### Establish the facts before bulk translation
+
+- Find in-game evidence for who is older: bios, letters/notes ("You're the bestest big sister ever!"), and self-referential lines ("you're literally not even three years older than me").
+- Record the canonical relationship in `glossary.json` so every prompt carries it, e.g.:
+
+```json
+{"en": "Penelope (older sister of Dalia)", "zh": "佩内洛普（达莉亚的姐姐）", "type": "note"}
+```
+
+- The entry doubles as a validation term: any sister-line involving a cast name that renders without 姐/妹 trips review.
+
+### Post-translation audit (where errors actually hide)
+
+Every occurrence must be checked with speaker + addressee context:
+
+1. Pull all dialogue records matching `\bsister` and `\b(sis|sissy)\b` from `work/records_<lang>.json` (fields: `speaker`, `file`, `id`, `en`).
+2. Resolve each speaker to a character via the `Character(...)` defines, then read the surrounding scene for who they address. `records` store exact source strings and memory keys are exact, so each fix is a one-key memory edit.
+3. Include third-party lines: parents ("same as your sister"), friends theorizing ("First, her sister... the last person to see [mc]"), and nicknames ("Sissy" used as a pet name).
+4. Fix in `work/memory_<lang>.json` (exact keys), re-run `apply`, then `compile`, and confirm the new text is baked into the `.rpyc`.
+
+### Verifying the compiled payload
+
+`tl/<lang>/*.rpyc` files are `RENPY RPC2` magic + headers followed by a zlib stream (typically starting at byte 46). After `compile`, decompress and grep for the fixed strings:
+
+```python
+import zlib
+data = open('game/tl/chinese/script9.rpyc', 'rb').read()
+start = next(i for i in range(11, 128)
+             if data[i] == 0x78 and data[i + 1] in (0x01, 0x5E, 0x9C, 0xDA))
+text = zlib.decompress(data[start:])
+assert '你是我妹妹'.encode('utf-8') in text          # new form present
+assert '你是我姐姐'.encode('utf-8') not in text       # old form gone
+```
+
+### Field case: Eternum 0.9.0
+
+Penelope is Dalia's older sister (姐姐); Dalia is the younger one (妹妹) - proven in-script by Dalia's "you're literally not even three years older than me" and Dalia's note "You're the bestest big sister ever!". A full audit found 18 wrong/ambiguous lines across script.rpy/3/4/5/6/8/9:
+
+- **Penelope -> Dalia (妹妹)**: "YOU'RE MY SISTER!" was 你是我姐姐！ -> 你是我妹妹！; "*Grumbling to herself* My goddamn sister?!" -> 我亲妹妹？！; "I love you too sissy!" -> 我也爱你，妹妹！; "Hi sis!" -> 嗨，妹妹！; "private conversation, sis" -> 私人谈话，妹妹.
+- **Dalia -> Penelope (姐姐)**: "If I had made out with my sister yesterday..." was 我妹妹 -> 我姐姐; "Let's go, sissy!" -> 走吧，姐姐！; "Just be careful not to go there alone, sis." -> 小心别一个人去那儿，姐姐.
+- **Third-party**: Nancy (their mother) "same as your sister" -> 跟你姐姐一样；Nova "First, her sister..." (about Penny's sister Dalia) -> 先是她妹妹.
+
+The fix was a single memory pass (18 exact keys), `apply`, `compile`, and a positive+negative zlib-string check on the regenerated `.rpyc` files - all 18 new forms FOUND, all old forms GONE.
 
 ## Production numbers and expectations
 
