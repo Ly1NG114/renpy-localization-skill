@@ -1,4 +1,4 @@
-﻿# Ren'Py PC Localization Field Guide
+# Ren'Py PC Localization Field Guide
 
 Field-tested on a 57,619-unique-string production run (Eternum 0.9.0, Ren'Py 8.3.2). Read this before touching any PC Ren'Py game.
 
@@ -129,6 +129,11 @@ Report `MISSING translations: 0` before compiling.
 - Latin-only fonts (ade1.ttf, Sketchzone.ttf, poiretone.ttf...) render CJK as tofu. Override at `init 999` (after the game's init-0 style statements) on `style.default` plus dialogue/name/button/input/tooltip/history/menu styles.
 - Prefer a CJK font already shipped in `game/` (many repacks include `chinafont.ttf`); otherwise bundle a licensed font.
 - `style.default.font` cascades to styles that don't set their own font; explicit per-style overrides cover the rest.
+
+## Save compatibility
+
+- Saves live in `%APPDATA%\RenPy\<config.save_directory>\` - NEVER assume `game/saves` (bundled repack saves can sit there unused). Always resolve via `renpy.config.savedir` inside the runtime.
+- Dynamic values like a player nickname are stored BOTH as store variables AND baked into rendered dialogue inside the rollback log. Fixing the menu assignments and an `after_load` callback is not enough for existing saves: byte-level pickle surgery (with BYTE-count length fields), validation via the game's own unpickler, and ECDSA re-signing are required. Full verified procedure: [save-compatibility.md](save-compatibility.md).
 
 ## Verification ladder
 

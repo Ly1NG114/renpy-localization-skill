@@ -1,4 +1,4 @@
-﻿---
+---
 name: renpy-localization
 description: Localize Ren'Py games (PC and Android) into Chinese or other languages with enforced proper-noun consistency, official-engine translation skeletons, two-pass LLM translation with deterministic memory, automated tag/interpolation/glossary validation and repair, CJK font bootstrap, compile verification, and runtime smoke tests - including adult games. Use when Codex must translate a Ren'Py game, generate or compile tl/<language> translations, keep character/place names consistent across 50k+ lines, decompile .rpyc, patch Character display names or CJK fonts, rebuild and sign Android APKs, or diagnose Ren'Py tracebacks.
 ---
@@ -10,6 +10,7 @@ Deliver a natural, terminology-consistent localization for Ren'Py games on **PC 
 ## Load the relevant guidance
 
 - Read [references/renpy-field-guide.md](references/renpy-field-guide.md) before starting any PC game localization (skeleton generation, extraction, translation, application, fonts, verification) and for the pitfall checklist distilled from a 57k-line production run.
+- Read [references/save-compatibility.md](references/save-compatibility.md) before touching ANY save file (fixing stale nicknames/names, save migration, or save surgery) - it covers the real save directory, pickle byte-length semantics, rendered-text baking, verified rewrite/resign, and hook timing.
 - Read [references/adult-localization-quality.md](references/adult-localization-quality.md) when the game contains explicit sexual content, fetish terminology, erotic sound effects, route-dependent identities, or character voices that machine translation could flatten.
 - Read [references/renpy-android-field-guide.md](references/renpy-android-field-guide.md) when packaging, signing, or runtime-testing an Android APK.
 - Read [references/device-runtime-playbook.md](references/device-runtime-playbook.md) when the target uses ADB, HarmonyOS HDC, an emulator, or an Android compatibility container.
@@ -137,7 +138,14 @@ Follow `references/renpy-android-field-guide.md`: immutable APK baseline, minima
 11. **The engine's own `translate` command appends** - never run it on filled files; use `--count`.
 12. **Keep the API key out of logs**; unverified SSL context may be required behind MITM proxies (CN networks).
 13. **Time/cost expectations**: ~57k unique strings took ~9.5M tokens (in ~5.5M / out ~3.6M counted) and ~7.5h wall time in production, including a full second polish pass.
+14. **Saves live in `%APPDATA%\RenPy\<config.save_directory>\`, not `game/saves`** - the latter may hold bundled, unused saves; patch the real ones.
+15. **Pickle string length fields count BYTES** (BINUNICODE `X`/`\x8c`/`\x8d`): writing character counts corrupts saves with `UnicodeDecodeError ... unexpected end of data`.
+16. **Rollback logs store RENDERED dialogue** - `[nickname]` is already substituted; fixing the store value alone leaves baked English in history/rollback text. Rewrite strings at the byte level.
+17. **`pickle.loads` tests stop at the first renpy class reference** - strings after it are never validated. Use a full opcode-stream walker and check length deltas (each "Heracles"->"赫拉克勒斯" replacement must grow output by exactly 7 bytes).
+18. **Python `\b` treats CJK as word chars** - use `(?<![A-Za-z])Name(?![A-Za-z])` when replacing ASCII names embedded in Chinese text.
+19. **`renpy.savetoken.check_load(log, sig)` expects a str signature**; passing bytes silently fails verification.
+20. **Hook timing**: `config.after_load_callbacks` (no args) normalizes store values on load; `renpy.game.post_init` runs once before the main menu (one-shot repairs); `config.start_callbacks` only fires when a game starts - wrong for menu-time fixes.
 
 ## Deliver the result
 
-Return: the translated game path, translation block counts, `0 missing` verification output, glossary size and consistency mechanisms, validation summary (tag/interp/backslash/glossary counts), font/bootstrap files added, compile + smoke-test evidence, remaining baked-image/video English, and exact instructions to launch.
+Return: the translated game path, translation block counts, `0 missing` verification output, glossary size and consistency mechanisms, validation summary (tag/interp/backslash/glossary counts), font/bootstrap files added, compile + smoke-test evidence, remaining baked-image/video English, exact instructions to launch, and - when saves were touched - the save-compatibility report (real save dir, what was rewritten, validation + resign evidence, backups).
