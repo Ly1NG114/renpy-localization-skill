@@ -1,0 +1,29 @@
+﻿{
+  "note": "Ren'Py 汉化术语表。entries 的 en=zh 为强制映射：英文专有名词出现时译文必须使用对应词条。policies 用于修复模型产出的译名变体（旧译名 -> 规范译名），自动应用于 validate 报告的违规行。type=role 的词条（普通角色称呼）不参与强制校验。",
+  "entries": [
+    {"en": "Eternum", "zh": "永恒世界", "type": "world"},
+    {"en": "Kredon", "zh": "克雷登", "type": "city"},
+    {"en": "Ulysses Corporation", "zh": "尤利西斯公司", "type": "org"},
+    {"en": "Gems of Doom", "zh": "厄运宝石", "type": "item"},
+    {"en": "Annie", "zh": "安妮", "type": "character"},
+    {"en": "Dalia", "zh": "达莉亚", "type": "character"},
+    {"en": "Nova", "zh": "诺娃", "type": "character"},
+    {"en": "Luna", "zh": "露娜", "type": "character"},
+    {"en": "Penelope", "zh": "佩内洛普", "type": "character"},
+    {"en": "Penny", "zh": "佩妮", "type": "character"},
+    {"en": "Chang", "zh": "常", "type": "character"},
+    {"en": "Orion", "zh": "奥赖恩", "type": "character"},
+    {"en": "Neighbor", "zh": "邻居", "type": "role"},
+    {"en": "Teacher", "zh": "老师", "type": "role"}
+  ],
+  "policies": {
+    "Penelope": {"佩妮": "佩内洛普"},
+    "Nova": {"新星": "诺娃"},
+    "Dalia": {"达利亚": "达莉亚"},
+    "Kredon": {"克里登": "克雷登", "克莱登": "克雷登"},
+    "Xet": {"赛特": "塞特"},
+    "Ion": {"伊昂": "艾恩", "爱恩": "艾恩", "离子服务器": "艾恩"},
+    "E-suit": {"永恒服": "电子服"},
+    "E-Suit": {"永恒服": "电子服"}
+  }
+}
