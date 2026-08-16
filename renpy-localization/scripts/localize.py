@@ -3,7 +3,7 @@
 Ren'Py localization pipeline (PC-first, Android-compatible).
 
 Subcommands:
-  extract   - parse an engine-generated tl/<lang>/ skeleton into work/records.json + unique.json
+  extract   - parse an engine-generated tl/<lang>/ skeleton into project-local work files
   translate - bulk-translate unique strings via an OpenAI-compatible API (deterministic memory)
   polish    - second-pass native-proofreader polish of all translations
   validate  - 4-way checks: tags / interpolations / backslash escapes / glossary terms
@@ -17,7 +17,9 @@ Consistency guarantees:
   * same-source deduplication: repeated lines are translated once
 
 Environment:
-  RENPY_GAME_DIR  - game root (folder containing game/, renpy/, lib/)
+  RENPY_GAME_DIR                   - game root (folder containing game/, renpy/, lib/)
+  RENPY_LOCALIZATION_PROJECT_DIR   - optional project state directory
+  RENPY_LOCALIZATION_CA_FILE       - optional trusted CA bundle for HTTPS
   DEEPSEEK_API_KEY (or --api-key)
 
 Examples:
@@ -31,12 +33,45 @@ Examples:
 """
 import os, re, json, ssl, time, sys, threading, io, glob, shutil, collections, argparse, urllib.request
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
-GAME_DIR = os.environ.get('RENPY_GAME_DIR', '')
-WORK = os.path.join(ROOT, 'work')
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+GAME_DIR = ''
+PROJECT_DIR = ''
+WORK = ''
 
-# Tolerate local MITM / SSL-inspection proxies (common in CN networks).
-CTX = ssl._create_unverified_context()
+
+def configure_paths(game_dir, project_dir=''):
+    """Configure game and state paths without sharing memory across games."""
+    global GAME_DIR, PROJECT_DIR, WORK
+    GAME_DIR = os.path.abspath(os.path.expanduser(game_dir))
+    requested = project_dir
+    if requested:
+        PROJECT_DIR = os.path.abspath(os.path.expanduser(requested))
+    else:
+        PROJECT_DIR = os.path.join(GAME_DIR, '.renpy-localization')
+    WORK = os.path.join(PROJECT_DIR, 'work')
+
+
+def build_ssl_context(insecure=False, ca_file=''):
+    """Return a verified TLS context unless insecure mode is explicitly enabled."""
+    if insecure and ca_file:
+        raise ValueError('choose either a trusted CA file or insecure TLS, not both')
+    if insecure:
+        return ssl._create_unverified_context()
+    return ssl.create_default_context(cafile=ca_file or None)
+
+
+def warn_if_legacy_state_is_ignored(project_dir_arg=''):
+    """Make the one-time migration from the old shared script state explicit."""
+    if project_dir_arg:
+        return
+    legacy_work = os.path.join(SCRIPT_DIR, 'work')
+    legacy_glossary = os.path.join(SCRIPT_DIR, 'glossary.json')
+    if os.path.isdir(legacy_work) or os.path.isfile(legacy_glossary):
+        print(
+            'NOTICE: legacy shared state under %s is ignored. Copy it into %s '
+            'after confirming it belongs to this game, or pass --project-dir %s '
+            'temporarily to reuse it.' % (SCRIPT_DIR, PROJECT_DIR, SCRIPT_DIR)
+        )
 
 TAG_RE = re.compile(r'\{[^{}]*\}')
 INT_RE = re.compile(r'\[[^\[\]]*\]')
@@ -57,7 +92,7 @@ def unique_path(lang):
     return os.path.join(WORK, 'unique_%s.json' % lang)
 
 def glossary_path():
-    return os.path.join(ROOT, 'glossary.json')
+    return os.path.join(PROJECT_DIR, 'glossary.json')
 
 def load_glossary():
     p = glossary_path()
@@ -116,7 +151,13 @@ def post_json(args, payload, timeout=420):
         args.api_url,
         data=json.dumps(payload).encode('utf-8'),
         headers={'Authorization': 'Bearer ' + api_key(args), 'Content-Type': 'application/json'})
-    with urllib.request.urlopen(req, context=CTX, timeout=timeout) as r:
+    context = getattr(args, 'ssl_context', None)
+    if context is None:
+        context = build_ssl_context(
+            getattr(args, 'insecure_ssl', False),
+            getattr(args, 'ca_file', ''),
+        )
+    with urllib.request.urlopen(req, context=context, timeout=timeout) as r:
         return json.loads(r.read().decode('utf-8'))
 
 def build_speaker_map():
@@ -758,8 +799,24 @@ def cmd_names(args):
 def main():
     ap = argparse.ArgumentParser(description="Ren'Py localization pipeline")
     ap.add_argument('--game-dir', default=os.environ.get('RENPY_GAME_DIR', ''), help='game root')
+    ap.add_argument(
+        '--project-dir',
+        default=os.environ.get('RENPY_LOCALIZATION_PROJECT_DIR', ''),
+        help='project-specific state directory (default: <game-dir>/.renpy-localization)',
+    )
     ap.add_argument('--api-url', default='https://api.deepseek.com/chat/completions')
     ap.add_argument('--api-key', default='', help='API key (env DEEPSEEK_API_KEY preferred)')
+    tls = ap.add_mutually_exclusive_group()
+    tls.add_argument(
+        '--ca-file',
+        default=os.environ.get('RENPY_LOCALIZATION_CA_FILE', ''),
+        help='trusted CA bundle for HTTPS inspection proxies',
+    )
+    tls.add_argument(
+        '--insecure-ssl',
+        action='store_true',
+        help='disable HTTPS certificate verification (unsafe; explicit opt-in only)',
+    )
     sub = ap.add_subparsers(dest='cmd', required=True)
 
     p = sub.add_parser('extract'); p.add_argument('--lang', default='chinese'); p.set_defaults(func=cmd_extract)
@@ -786,10 +843,17 @@ def main():
     args = ap.parse_args()
     if not args.game_dir:
         sys.exit('set --game-dir or RENPY_GAME_DIR')
-    global GAME_DIR
-    GAME_DIR = args.game_dir
-    if not api_key(args) and args.cmd in ('translate', 'polish'):
-        sys.exit('API key required (DEEPSEEK_API_KEY or --api-key)')
+    if args.insecure_ssl and args.ca_file:
+        ap.error('--insecure-ssl cannot be combined with --ca-file or RENPY_LOCALIZATION_CA_FILE')
+    configure_paths(args.game_dir, args.project_dir)
+    warn_if_legacy_state_is_ignored(args.project_dir)
+    print('project state:', PROJECT_DIR)
+    if args.cmd in ('translate', 'polish'):
+        if not api_key(args):
+            sys.exit('API key required (DEEPSEEK_API_KEY or --api-key)')
+        args.ssl_context = build_ssl_context(args.insecure_ssl, args.ca_file)
+        if args.insecure_ssl:
+            print('WARNING: HTTPS certificate verification is disabled for this run.')
     args.func(args)
 
 if __name__ == '__main__':

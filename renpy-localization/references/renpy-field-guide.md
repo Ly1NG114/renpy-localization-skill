@@ -5,15 +5,18 @@ Field-tested on a 57,619-unique-string production run (Eternum 0.9.0, Ren'Py 8.3
 ## Contents
 
 1. [Engine-generated skeleton](#engine-generated-skeleton)
-2. [Extraction model](#extraction-model)
-3. [Consistency machinery](#consistency-machinery)
-4. [Two-pass translation](#two-pass-translation)
-5. [Validation and repair semantics](#validation-and-repair-semantics)
-6. [Application format](#application-format)
-7. [Language bootstrap and fonts](#language-bootstrap-and-fonts)
-8. [Verification ladder](#verification-ladder)
-9. [Kinship term directionality](#kinship-term-directionality)
-10. [Production numbers and expectations](#production-numbers-and-expectations)
+2. [Project-scoped state](#project-scoped-state)
+3. [Extraction model](#extraction-model)
+4. [Consistency machinery](#consistency-machinery)
+5. [Two-pass translation](#two-pass-translation)
+6. [Validation and repair semantics](#validation-and-repair-semantics)
+7. [Application format](#application-format)
+8. [Language bootstrap and fonts](#language-bootstrap-and-fonts)
+9. [Persistent-backed translatable UI](#persistent-backed-translatable-ui)
+10. [Save compatibility](#save-compatibility)
+11. [Verification ladder](#verification-ladder)
+12. [Kinship term directionality](#kinship-term-directionality)
+13. [Production numbers and expectations](#production-numbers-and-expectations)
 
 ## Engine-generated skeleton
 
@@ -52,6 +55,12 @@ Notes:
 - `.rpyc` files: Ren'Py stores the source md5 at the end of the `.rpyc`; when the `.rpy` changes, the next launch recompiles automatically. Decompiled `.rpy` (UnRen) will therefore trigger recompiles - expected.
 - `tl/<lang>/*.rpyc` also carry the md5 of the `.rpy`; editing translations invalidates them and triggers recompile.
 
+## Project-scoped state
+
+The pipeline defaults to `<game-dir>/.renpy-localization/`, with `glossary.json` at its root and generated files under `work/`. Never share one translation memory between unrelated games: identical English can require different terminology, speakers, or context.
+
+Override the location with global `--project-dir <path>` or `RENPY_LOCALIZATION_PROJECT_DIR`. Releases before 3.2 stored `glossary.json` and `work/` beside `localize.py`. The new pipeline ignores that shared state and prints a migration notice. Copy it into the game's project directory only after confirming ownership, or temporarily use the scripts directory as `--project-dir`.
+
 ## Extraction model
 
 `localize.py extract` parses:
@@ -65,9 +74,9 @@ It outputs records (every block, for deterministic re-application) and unique st
 
 Order of enforcement:
 
-1. **Deterministic memory** (`work/memory_<lang>.json`, keyed by exact source): the same source string maps to exactly one translation everywhere in the game - including repeated lines inside the same file. This is the backbone.
+1. **Deterministic memory** (`.renpy-localization/work/memory_<lang>.json`, keyed by exact source): the same source string maps to exactly one translation everywhere in the game - including repeated lines inside the same file. This is the backbone.
 2. **Glossary injection**: every API prompt carries the full glossary (name=term lines). Speakers' display names (resolved from `Character(...)` defines) are attached per item so the model keeps voices distinct.
-3. **Validation**: 4 token-multiset checks per record (tags, interpolations, backslash escapes, glossary terms) produce `work/v_*.txt`.
+3. **Validation**: 4 token-multiset checks per record (tags, interpolations, backslash escapes, glossary terms) produce `.renpy-localization/work/v_*.txt`.
 4. **Repair**: policy-driven fixes are applied to memory, then re-validated. Iterate until only benign residuals remain (source bugs, intentional variants).
 
 Glossary `policies` example - when the model produces variants, map them back:
@@ -89,7 +98,9 @@ Pass 1 (`translate`): temperature 0.4, thinking disabled by default, batches of 
 
 Pass 2 (`polish`): a native-speaker proofreader prompt (en + current zh -> improved zh). Use thinking mode for: lines >= 81 chars, any line with Ren'Py tags, and early-story files. Everything else runs without thinking. ~22% of lines typically change in this pass; the rest are kept verbatim.
 
-If a batch fails, record its contents (`work/polish_batches/batch_N.txt`) so you can re-run with `--only-en-file`.
+HTTPS certificates are verified by default. If a trusted inspection proxy uses a private CA, pass global `--ca-file <bundle.pem>` or set `RENPY_LOCALIZATION_CA_FILE`. Global `--insecure-ssl` is an explicit last resort and prints a warning.
+
+If a batch fails, record its contents (`.renpy-localization/work/polish_batches/batch_N.txt`) so you can re-run with `--only-en-file`.
 
 ## Validation and repair semantics
 
@@ -131,6 +142,48 @@ Report `MISSING translations: 0` before compiling.
 - Prefer a CJK font already shipped in `game/` (many repacks include `chinafont.ttf`); otherwise bundle a licensed font.
 - `style.default.font` cascades to styles that don't set their own font; explicit per-style overrides cover the rest.
 
+## Persistent-backed translatable UI
+
+Treat display text stored in `persistent` as a migration problem, not ordinary string coverage. A common pattern is:
+
+```renpy
+default persistent.lore_entry = Lore(
+    title=_("Entry title"),
+    content=[_p("""Long body...""")],
+)
+```
+
+`default` runs only when the persistent attribute does not exist. Existing players can therefore keep an older English `title` or `content` after an update changes the source text and translation key. A screen such as `renpy.translate_string(entry.content[0])` performs exact lookup; when the cached old revision is no longer a current `old` key, it silently returns English. The engine can still report `0 missing`, compile cleanly, and start without errors.
+
+### Audit before translation
+
+Run:
+
+```powershell
+python scripts/scan_dynamic_strings.py `
+  --source-root <game>/game `
+  --translation-root <game>/game/tl/<lang> `
+  --fail-on-uncovered
+```
+
+Inspect every `PERSISTENT_I18N_RISK`, plus custom classes used by codices, chats, galleries, quest logs, notifications, and save metadata. Follow the data from construction to the screen action and final `text` statement. Check whether the screen stores a raw string in a screen variable before rendering it.
+
+### Fix without damaging progress
+
+Prefer persisting stable IDs and state (`discovered`, `read`, route flags) while resolving current display strings at render time. If an existing architecture already persists text:
+
+1. Keep unlock/read/progress fields untouched.
+2. Resolve the current exact translation first.
+3. Optionally retry after harmless normalization such as `lstrip()` when triple-quoted storage introduced leading whitespace.
+4. For known legacy revisions, use a stable entry identity or a unique opening phrase to locate the current canonical translation. Limit this fallback to the affected language and cache it. Do not globally fuzzy-match arbitrary dialogue.
+5. Avoid rewriting `persistent` or saves unless the user asked for migration; display-time compatibility is safer and remains reversible across languages.
+
+### Verify the actual object
+
+Use the real `%APPDATA%\RenPy\<config.save_directory>\persistent`. For every reported item, record the pre-fix and post-fix result through the same helper the screen calls. Confirm the output contains the target script (for Chinese, at least one CJK character where appropriate) and is not the unchanged source. Multi-passage entries require checking every passage.
+
+Prefer clicking each item and capturing the rendered screen. If UI automation is unavailable, add a temporary in-engine self-test that reads the real persistent objects, invokes the exact display helper, and writes explicit per-entry results to a dedicated log. Configure `config.log` before `renpy.log` if the game leaves it unset. Remove the temporary `.rpy`, generated `.rpyc`, and diagnostic log after the test, then compile again.
+
 ## Save compatibility
 
 - Saves live in `%APPDATA%\RenPy\<config.save_directory>\` - NEVER assume `game/saves` (bundled repack saves can sit there unused). Always resolve via `renpy.config.savedir` inside the runtime.
@@ -140,9 +193,13 @@ Report `MISSING translations: 0` before compiling.
 
 1. `compile` - zero errors (catches unbalanced quotes, bad escapes, unparseable strings);
 2. `translate <lang> --count` - zero missing dialogue/string translations;
-3. launch game GUI ~60-75s; inspect `log.txt` for error/traceback/warning;
-4. window title / main menu renders in target language (the title often comes from a translated string - strong runtime evidence);
-5. screenshot for the record.
+3. dynamic/persistent audit - no unexplained uncovered strings or persistent text risks;
+4. startup smoke - launch the GUI and inspect `log.txt` for relevant errors;
+5. feature-level runtime - load representative existing data and open every changed or user-reported screen/entry;
+6. object-level fallback test when UI control is unavailable - invoke the exact display helper on real runtime objects, not copied fixtures;
+7. screenshot or explicit per-entry runtime log for the record.
+
+Do not collapse steps 4-7 into “runtime tested.” Process liveness proves startup only. A clean log does not prove that a codex entry, chat message, gallery caption, or cached save string rendered in the target language.
 
 ## Kinship term directionality
 
@@ -151,7 +208,7 @@ Chinese kinship terms encode relative age; English does not. "sister" -> 姐姐 
 ### Establish the facts before bulk translation
 
 - Find in-game evidence for who is older: bios, letters/notes ("You're the bestest big sister ever!"), and self-referential lines ("you're literally not even three years older than me").
-- Record the canonical relationship in `glossary.json` so every prompt carries it, e.g.:
+- Record the canonical relationship in `.renpy-localization/glossary.json` so every prompt carries it, e.g.:
 
 ```json
 {"en": "Penelope (older sister of Dalia)", "zh": "佩内洛普（达莉亚的姐姐）", "type": "note"}
@@ -163,10 +220,10 @@ Chinese kinship terms encode relative age; English does not. "sister" -> 姐姐 
 
 Every occurrence must be checked with speaker + addressee context:
 
-1. Pull all dialogue records matching `\bsister` and `\b(sis|sissy)\b` from `work/records_<lang>.json` (fields: `speaker`, `file`, `id`, `en`).
+1. Pull all dialogue records matching `\bsister` and `\b(sis|sissy)\b` from `.renpy-localization/work/records_<lang>.json` (fields: `speaker`, `file`, `id`, `en`).
 2. Resolve each speaker to a character via the `Character(...)` defines, then read the surrounding scene for who they address. `records` store exact source strings and memory keys are exact, so each fix is a one-key memory edit.
 3. Include third-party lines: parents ("same as your sister"), friends theorizing ("First, her sister... the last person to see [mc]"), and nicknames ("Sissy" used as a pet name).
-4. Fix in `work/memory_<lang>.json` (exact keys), re-run `apply`, then `compile`, and confirm the new text is baked into the `.rpyc`.
+4. Fix in `.renpy-localization/work/memory_<lang>.json` (exact keys), re-run `apply`, then `compile`, and confirm the new text is baked into the `.rpyc`.
 
 ### Verifying the compiled payload
 

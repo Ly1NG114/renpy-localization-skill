@@ -1,4 +1,4 @@
-﻿interface:
-  display_name: "Ren'Py 汉化 3.0"
-  short_description: "汉化 Ren'Py 游戏（PC/Android），术语强制一致，两遍翻译+自动校验"
-  default_prompt: "Use $renpy-localization to localize this Ren'Py game with enforced terminology consistency."
+interface:
+  display_name: "Ren'Py 汉化 3.2"
+  short_description: "汉化 Ren'Py 游戏，并校验术语、动态文本和 persistent 旧英文"
+  default_prompt: "Use $renpy-localization to localize this Ren'Py game and verify dynamic or persistent-backed text at runtime."
